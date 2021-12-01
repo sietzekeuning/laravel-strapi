@@ -5,6 +5,7 @@ namespace Dbfx\LaravelStrapi;
 use Dbfx\LaravelStrapi\Exceptions\NotFound;
 use Dbfx\LaravelStrapi\Exceptions\PermissionDenied;
 use Dbfx\LaravelStrapi\Exceptions\UnknownError;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
@@ -21,14 +22,14 @@ class LaravelStrapi
         $this->cacheTime = config('strapi.cacheTime');
     }
 
-    public function collection(string $type, $sortKey = 'id', $sortOrder = 'DESC', $limit = 20, $start = 0, $fullUrls = true): array
+    public function collection(string $type, $sortKey = 'id', $sortOrder = 'DESC', $limit = 20, $start = 0, $fullUrls = true, $populate = null): Collection
     {
-        $url = $this->strapiUrl;
-        $cacheKey = self::CACHE_KEY . '.collection.' . $type . '.' . $sortKey . '.' . $sortOrder . '.' . $limit . '.' . $start;
+        $url      = $this->strapiUrl;
+        $cacheKey = self::CACHE_KEY . '.collection.' . $type . '.' . $sortKey . '.' . $sortOrder . '.' . $limit . '.' . $start . '.'. $populate;
 
         // Fetch and cache the collection type
-        $collection = Cache::remember($cacheKey, $this->cacheTime, function () use ($url, $type, $sortKey, $sortOrder, $limit, $start) {
-            $response = Http::get($url . '/' . $type . '?_sort=' . $sortKey . ':' . $sortOrder . '&_limit=' . $limit . '&_start=' . $start);
+        $collection = Cache::remember($cacheKey, $this->cacheTime, function () use ($url, $type, $sortKey, $sortOrder, $limit, $start, $populate) {
+            $response = Http::get($url . '/' . $type . '?_sort=' . $sortKey . ':' . $sortOrder . '&_limit=' . $limit . '&_start=' . $start . ($populate ? '&populate='.$populate : ''));
 
             return $response->json();
         });
@@ -61,7 +62,26 @@ class LaravelStrapi
             }
         }
 
-        return $collection;
+        return collect($collection['data'])->map(fn ($item) => $this->transformData($item, $populate));
+    }
+
+    public function transformData($item, $populate = null)
+    {
+        if (!isset($item['id']) || !isset($item['attributes'])) {
+            return $item;
+        }
+        $keys = explode(',', $populate);
+
+        $result       = $item['attributes'];
+        $result['id'] = $item['id'];
+
+        foreach ($keys as $key) {
+            if (isset($result[$key])) {
+                $result[$key] = (object)$this->transformData($result[$key]['data'] ?? $result[$key]);
+            }
+        }
+
+        return (object) $result;
     }
 
     public function collectionCount(string $type): int
@@ -77,7 +97,7 @@ class LaravelStrapi
 
     public function entry(string $type, int $id, $fullUrls = true): array
     {
-        $url = $this->strapiUrl;
+        $url      = $this->strapiUrl;
         $cacheKey = self::CACHE_KEY . '.entry.' . $type . '.' . $id;
 
         $entry = Cache::remember($cacheKey, $this->cacheTime, function () use ($url, $type, $id) {
@@ -114,13 +134,13 @@ class LaravelStrapi
         return $entry;
     }
 
-    public function entriesByField(string $type, string $fieldName, $fieldValue, $fullUrls = true): array
+    public function entriesByField(string $type, string $fieldName, $fieldValue, $fullUrls = true, $populate = null): Collection
     {
-        $url = $this->strapiUrl;
-        $cacheKey = self::CACHE_KEY . '.entryByField.' . $type . '.' . $fieldName . '.' . $fieldValue;
+        $url      = $this->strapiUrl;
+        $cacheKey = self::CACHE_KEY . '.entryByField.' . $type . '.' . $fieldName . '.' . $fieldValue . '.' . $populate;
 
-        $entries = Cache::remember($cacheKey, $this->cacheTime, function () use ($url, $type, $fieldName, $fieldValue) {
-            $response = Http::get($url . '/' . $type . '?' . $fieldName . '=' . $fieldValue);
+        $entries = Cache::remember($cacheKey, $this->cacheTime, function () use ($url, $type, $fieldName, $fieldValue, $populate) {
+            $response = Http::get($url . '/' . $type . '?' . $fieldName . '=' . $fieldValue . ($populate ? '&populate='.$populate : ''));
 
             return $response->json();
         });
@@ -153,12 +173,12 @@ class LaravelStrapi
             }
         }
 
-        return $entries;
+        return  collect($entries['data'])->map(fn ($item) => $this->transformData($item, $populate));
     }
 
     public function single(string $type, string $pluck = null, $fullUrls = true)
     {
-        $url = $this->strapiUrl;
+        $url      = $this->strapiUrl;
         $cacheKey = self::CACHE_KEY . '.single.' . $type;
 
         // Fetch and cache the collection type
